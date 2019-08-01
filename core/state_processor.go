@@ -17,6 +17,7 @@
 package core
 
 import (
+	"log"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -92,17 +93,24 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 	if err != nil {
 		return nil, nil, err
 	}
+
+	log.Printf("will handle tx@%s\n", tx.Hash().Hex())
+
+	vm.GetGlobalWatchDog().Start()
+
 	// Create a new context to be used in the EVM environment
 	context := NewEVMContext(msg, header, bc, author)
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
 	vmenv := vm.NewEVM(context, statedb, config, cfg)
+
+	vm.GetGlobalWatchDog().Watch(vmenv, tx)
+
 	// Apply the transaction to the current state (included in the env)
 	_, gas, err := ApplyMessage(vmenv, msg, gp)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	// Update the state with pending changes
 	var root []byte
 	if config.IsMetropolis(header.Number) {
@@ -125,6 +133,8 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 	// Set the receipt logs and create a bloom for filtering
 	receipt.Logs = statedb.GetLogs(tx.Hash())
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+
+	vm.GetGlobalWatchDog().End(receipt)
 
 	return receipt, gas, err
 }

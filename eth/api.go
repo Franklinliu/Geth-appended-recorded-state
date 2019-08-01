@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	logger "log"
 	"math/big"
 	"os"
 	"strings"
@@ -510,7 +511,7 @@ func (api *PrivateDebugAPI) TraceTransaction(ctx context.Context, txHash common.
 	} else {
 		tracer = vm.NewStructLogger(config.LogConfig)
 	}
-
+	receipt, _, _, _ := core.GetReceipt(api.eth.ChainDb(), txHash)
 	// Retrieve the tx from the chain and the containing block
 	tx, blockHash, _, txIndex := core.GetTransaction(api.eth.ChainDb(), txHash)
 	if tx == nil {
@@ -521,20 +522,33 @@ func (api *PrivateDebugAPI) TraceTransaction(ctx context.Context, txHash common.
 		return nil, err
 	}
 
+	logger.Printf("traceTransaction will handle tx@%s\n", tx.Hash().Hex())
+
+	vm.GetGlobalTracerWatchDog().Start()
+
 	// Run the transaction with tracing enabled.
 	vmenv := vm.NewEVM(context, statedb, api.config, vm.Config{Debug: true, Tracer: tracer})
+
+	vm.GetGlobalTracerWatchDog().Watch(vmenv, tx)
+
 	ret, gas, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas()))
 	if err != nil {
 		return nil, fmt.Errorf("tracing failed: %v", err)
 	}
 	switch tracer := tracer.(type) {
 	case *vm.StructLogger:
+		vm.GetGlobalTracerWatchDog().EndTracer(receipt, &ethapi.ExecutionResult{
+			Gas:         gas,
+			ReturnValue: fmt.Sprintf("%x", ret),
+			StructLogs:  ethapi.FormatLogs(tracer.StructLogs()),
+		})
 		return &ethapi.ExecutionResult{
 			Gas:         gas,
 			ReturnValue: fmt.Sprintf("%x", ret),
 			StructLogs:  ethapi.FormatLogs(tracer.StructLogs()),
 		}, nil
 	case *ethapi.JavascriptTracer:
+		vm.GetGlobalTracerWatchDog().End(receipt)
 		return tracer.GetResult()
 	default:
 		panic(fmt.Sprintf("bad tracer type %T", tracer))
